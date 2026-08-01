@@ -45,16 +45,16 @@ public class Shredder extends Module {
 		BLACKLIST
 	}
 
-	private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
-			.name("range").description("Nuke range.").defaultValue(5.0)
-			.min(1).sliderMin(1).max(20).build());
+	private final Setting<Integer> range = sgGeneral.add(new IntSetting.Builder()
+			.name("range").description("Nuke range.").defaultValue(5)
+			.min(1).sliderMin(1).max(20).sliderMax(6).build());
 
 	private final Setting<Double> wallsRange = sgGeneral.add(new DoubleSetting.Builder()
 			.name("walls-range").description("Range through walls.").defaultValue(6.0)
 			.min(0).sliderMin(0).max(6).build());
 
-	private final Setting<Double> delay = sgGeneral.add(new DoubleSetting.Builder()
-			.name("delay").description("Delay between breaks.").defaultValue(0.0)
+	private final Setting<Integer> delay = sgGeneral.add(new IntSetting.Builder()
+			.name("delay").description("Delay between breaks.").defaultValue(0)
 			.min(0).sliderMin(0).max(100).sliderMax(20).build());
 
 	private final Setting<Integer> bpt = sgGeneral.add(new IntSetting.Builder()
@@ -144,7 +144,7 @@ public class Shredder extends Module {
 
 		toBreak.clear();
 		Mode m = mode.get();
-		double r = range.get();
+		int r = range.get();
 		double wr = wallsRange.get();
 
 		BlockIterator.register((int) Math.ceil(r + 1), (int) Math.ceil(r + 1), (pos, worldState) -> {
