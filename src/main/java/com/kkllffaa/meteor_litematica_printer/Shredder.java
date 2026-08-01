@@ -1,29 +1,46 @@
 package com.kkllffaa.meteor_litematica_printer;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
 
 import fi.dy.masa.litematica.data.DataManager;
 import fi.dy.masa.litematica.schematic.placement.SchematicPlacement;
 import fi.dy.masa.litematica.schematic.placement.SchematicPlacementManager;
 import fi.dy.masa.litematica.world.SchematicWorldHandler;
 import fi.dy.masa.litematica.world.WorldSchematic;
-import meteordevelopment.meteorclient.events.render.Render3DEvent;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+import meteordevelopment.meteorclient.events.entity.player.BlockBreakingCooldownEvent;
+import meteordevelopment.meteorclient.events.meteor.KeyInputEvent;
+import meteordevelopment.meteorclient.events.meteor.MouseClickEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.Utils;
+import meteordevelopment.meteorclient.utils.misc.Keybind;
+import meteordevelopment.meteorclient.utils.misc.Names;
+import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
 import meteordevelopment.meteorclient.utils.player.InvUtils;
+import meteordevelopment.meteorclient.utils.player.PlayerUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.meteorclient.utils.render.RenderUtils;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.meteorclient.utils.world.BlockIterator;
 import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
+import meteordevelopment.orbit.EventPriority;
 import net.minecraft.core.BlockPos;
+import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
+import net.minecraft.network.protocol.game.ServerboundSwingPacket;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 public class Shredder extends Module {
@@ -45,6 +62,13 @@ public class Shredder extends Module {
 		BLACKLIST
 	}
 
+	public enum SortMode {
+		None,
+		Closest,
+		Furthest,
+		TopDown
+	}
+
 	private final Setting<Integer> range = sgGeneral.add(new IntSetting.Builder()
 			.name("range").description("Nuke range.").defaultValue(5)
 			.min(1).sliderMin(1).max(20).sliderMax(6).build());
@@ -58,20 +82,30 @@ public class Shredder extends Module {
 			.min(0).sliderMin(0).max(100).sliderMax(20).build());
 
 	private final Setting<Integer> bpt = sgGeneral.add(new IntSetting.Builder()
-			.name("blocks-per-tick").description("Max blocks per tick.").defaultValue(100)
+			.name("max-blocks-per-tick").description("Max blocks per tick.").defaultValue(100)
 			.min(1).sliderMin(1).max(100).build());
 
 	private final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
 			.name("mode").description("What to nuke.").defaultValue(Mode.ALL).build());
 
+	private final Setting<SortMode> sortMode = sgGeneral.add(new EnumSetting.Builder<SortMode>()
+			.name("sort-mode").description("The blocks you want to mine first.")
+			.defaultValue(SortMode.Closest).build());
+
+	private final Setting<Boolean> packetMine = sgGeneral.add(new BoolSetting.Builder()
+			.name("packet-mine").description("Attempt to instamine everything at once.")
+			.defaultValue(false).build());
+
+	private final Setting<Boolean> suitableTools = sgGeneral.add(new BoolSetting.Builder()
+			.name("only-suitable-tools").description("Only mines when using an appropriate tool for the block.")
+			.defaultValue(false).build());
+
+	private final Setting<Boolean> interact = sgGeneral.add(new BoolSetting.Builder()
+			.name("interact").description("Interacts with the block instead of mining.")
+			.defaultValue(false).build());
+
 	private final Setting<Boolean> rotate = sgGeneral.add(new BoolSetting.Builder()
 			.name("rotate").description("Rotate to target block.").defaultValue(true).build());
-
-	private final Setting<Boolean> swing = sgGeneral.add(new BoolSetting.Builder()
-			.name("swing").description("Swing hand.").defaultValue(true).build());
-
-	private final Setting<Boolean> silkTouch = sgGeneral.add(new BoolSetting.Builder()
-			.name("silk-touch").description("Prefer Silk Touch tool.").defaultValue(false).build());
 
 	private final Setting<FilterMode> listMode = sgWorkMode.add(new EnumSetting.Builder<FilterMode>()
 			.name("list-mode").description("Block list mode.").defaultValue(FilterMode.NONE).build());
@@ -79,6 +113,13 @@ public class Shredder extends Module {
 	private final Setting<List<Block>> filterBlocks = sgWorkMode.add(new BlockListSetting.Builder()
 			.name("filter-blocks").description("Blocks to whitelist or blacklist.")
 			.visible(() -> listMode.get() != FilterMode.NONE).build());
+
+	private final Setting<Keybind> selectBlockBind = sgWorkMode.add(new KeybindSetting.Builder()
+			.name("select-block-bind").description("Adds targeted block to list.")
+			.defaultValue(Keybind.none()).build());
+
+	private final Setting<Boolean> swing = sgRender.add(new BoolSetting.Builder()
+			.name("swing").description("Swing hand.").defaultValue(true).build());
 
 	private final Setting<Boolean> showBroken = sgRender.add(new BoolSetting.Builder()
 			.name("broken-blocks").description("Show recently broken blocks.").defaultValue(true).build());
@@ -96,9 +137,11 @@ public class Shredder extends Module {
 			.defaultValue(new SettingColor(255, 0, 0, 255)).visible(showBroken::get).build());
 
 	private int timer;
-	private final List<BlockPos> toBreak = new ArrayList<>();
-	private final List<BlockPos> brokenBlocks = new ArrayList<>();
-	private int brokenBlockLife;
+	private int noBlockTimer;
+	private boolean firstBlock;
+	private final BlockPos.MutableBlockPos lastBlockPos = new BlockPos.MutableBlockPos();
+	private final Set<BlockPos> interacted = new ObjectOpenHashSet<>();
+	private final List<BlockPos> blocks = new ArrayList<>();
 
 	public Shredder() {
 		super(Addon.CATEGORY, "shredder", "Breaks blocks based on Litematica schematic.");
@@ -106,20 +149,38 @@ public class Shredder extends Module {
 
 	@Override
 	public void onActivate() {
+		firstBlock = true;
 		timer = 0;
-		toBreak.clear();
-		brokenBlocks.clear();
-		brokenBlockLife = 0;
+		noBlockTimer = 0;
+		interacted.clear();
+		blocks.clear();
 	}
 
 	@Override
 	public void onDeactivate() {
-		toBreak.clear();
-		brokenBlocks.clear();
+		blocks.clear();
+		interacted.clear();
 	}
 
 	@EventHandler
-	private void onTick(TickEvent.Pre event) {
+	private void onMouseClick(MouseClickEvent event) {
+		if (event.action == KeyAction.Press)
+			addTargetedBlockToList();
+	}
+
+	@EventHandler
+	private void onKey(KeyInputEvent event) {
+		if (event.action == KeyAction.Press)
+			addTargetedBlockToList();
+	}
+
+	@EventHandler(priority = EventPriority.HIGHEST)
+	private void onBlockBreakingCooldown(BlockBreakingCooldownEvent event) {
+		event.cooldown = 0;
+	}
+
+	@EventHandler
+	private void onTickPre(TickEvent.Pre event) {
 		if (mc.player == null || mc.level == null || mc.gameMode == null)
 			return;
 
@@ -129,97 +190,167 @@ public class Shredder extends Module {
 			return;
 		}
 
-		if (brokenBlockLife > 0)
-			brokenBlockLife--;
-		if (brokenBlockLife <= 0)
-			brokenBlocks.clear();
-
-		if (timer < delay.get()) {
-			timer++;
+		if (timer > 0) {
+			timer--;
 			return;
 		}
 
-		if (silkTouch.get())
-			equipSilkTool();
+		double pX = mc.player.getX(), pY = mc.player.getY(), pZ = mc.player.getZ();
+		double rangeSq = Math.pow(range.get(), 2);
 
-		toBreak.clear();
-		Mode m = mode.get();
+		equipSilkTool();
+
+		blocks.clear();
+		Mode breakMode = mode.get();
 		int r = range.get();
-		double wr = wallsRange.get();
 
-		BlockIterator.register((int) Math.ceil(r + 1), (int) Math.ceil(r + 1), (pos, worldState) -> {
-			if (worldState.isAir())
+		BlockIterator.register(r + 1, r + 1, (blockPos, blockState) -> {
+			double distSq = Utils.squaredDistance(pX, pY, pZ, blockPos.getX() + 0.5, blockPos.getY() + 0.5,
+					blockPos.getZ() + 0.5);
+			if (distSq > rangeSq)
+				return;
+			if (blockState.isAir())
 				return;
 
-			BlockState schemState = ws.getBlockState(pos);
+			BlockState schemState = ws.getBlockState(blockPos);
 			if (!schemState.isAir()) {
 				/* inside schematic */ } else {
-				if (!isInsideAnySchematic(pos))
+				if (!isInsideAnySchematic(blockPos))
 					return;
 			}
 
-			if (!shouldBreak(m, schemState, worldState))
+			if (!shouldBreak(breakMode, schemState, blockState))
 				return;
 
-			if (mc.player.getBoundingBox().intersects(Vec3.atLowerCornerOf(pos),
-					Vec3.atLowerCornerOf(pos).add(1, 1, 1)))
+			if (mc.player.getBoundingBox().intersects(Vec3.atLowerCornerOf(blockPos),
+					Vec3.atLowerCornerOf(blockPos).add(1, 1, 1)))
 				return;
 
 			FilterMode fm = listMode.get();
 			if (fm != FilterMode.NONE) {
-				boolean inList = filterBlocks.get().contains(worldState.getBlock());
+				boolean inList = filterBlocks.get().contains(blockState.getBlock());
 				if (fm == FilterMode.BLACKLIST ? inList : !inList)
 					return;
 			}
 
-			double dist = mc.player.getEyePosition().distanceTo(pos.getCenter());
-			if (!isBlockVisible(pos) && dist > wr)
+			if (suitableTools.get() && !interact.get()
+					&& !mc.player.getMainHandItem().isCorrectToolForDrops(blockState))
 				return;
 
-			toBreak.add(new BlockPos(pos));
+			if (!BlockUtils.canBreak(blockPos, blockState) && !interact.get())
+				return;
+
+			if (isOutOfRange(blockPos))
+				return;
+
+			if (interact.get() && interacted.contains(blockPos))
+				return;
+
+			blocks.add(blockPos.immutable());
 		});
 
 		BlockIterator.after(() -> {
-			int broken = 0;
-			for (BlockPos pos : toBreak) {
-				boolean canInsta = mc.player.isCreative() || BlockUtils.canInstaBreak(pos);
+			if (sortMode.get() == SortMode.TopDown)
+				blocks.sort(Comparator.comparingDouble(value -> -value.getY()));
+			else if (sortMode.get() != SortMode.None)
+				blocks.sort(Comparator.comparingDouble(value -> Utils.squaredDistance(pX, pY, pZ, value.getX() + 0.5,
+						value.getY() + 0.5, value.getZ() + 0.5) * (sortMode.get() == SortMode.Closest ? 1 : -1)));
+
+			if (blocks.isEmpty()) {
+				interacted.clear();
+				if (noBlockTimer++ >= delay.get())
+					firstBlock = true;
+				return;
+			} else {
+				noBlockTimer = 0;
+			}
+
+			if (!firstBlock && !lastBlockPos.equals(blocks.getFirst())) {
+				timer = delay.get();
+				firstBlock = false;
+				lastBlockPos.set(blocks.getFirst());
+				if (timer > 0)
+					return;
+			}
+
+			int count = 0;
+			for (BlockPos block : blocks) {
+				if (count >= bpt.get())
+					break;
+
+				boolean canInstaMine = BlockUtils.canInstaBreak(block);
+
 				if (rotate.get())
-					Rotations.rotate(Rotations.getYaw(pos), Rotations.getPitch(pos),
-							() -> BlockUtils.breakBlock(pos, swing.get()));
+					Rotations.rotate(Rotations.getYaw(block), Rotations.getPitch(block), () -> breakBlock(block));
 				else
-					BlockUtils.breakBlock(pos, swing.get());
+					breakBlock(block);
 
-				if (showBroken.get()) {
-					brokenBlocks.add(new BlockPos(pos));
-					brokenBlockLife = 20;
-				}
+				if (showBroken.get())
+					RenderUtils.renderTickingBlock(block, nukerBlockSideColor.get(), nukerBlockLineColor.get(),
+							nukerBlockMode.get(), 0, 8, true, false);
+				lastBlockPos.set(block);
 
-				broken++;
-				if (!canInsta || broken >= bpt.get())
+				count++;
+				if (!canInstaMine && !packetMine.get())
 					break;
 			}
-		});
 
-		timer = 0;
+			firstBlock = false;
+			blocks.clear();
+		});
 	}
 
-	@EventHandler
-	private void onRender(Render3DEvent event) {
-		if (showBroken.get()) {
-			for (BlockPos pos : brokenBlocks) {
-				event.renderer.box(pos, nukerBlockSideColor.get(), nukerBlockLineColor.get(), nukerBlockMode.get(), 0);
-			}
+	private void breakBlock(BlockPos blockPos) {
+		if (interact.get()) {
+			BlockUtils.interact(
+					new BlockHitResult(blockPos.getCenter(), BlockUtils.getDirection(blockPos), blockPos, true),
+					InteractionHand.MAIN_HAND, swing.get());
+			interacted.add(blockPos);
+		} else if (packetMine.get()) {
+			mc.getConnection().send(new ServerboundPlayerActionPacket(
+					ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, blockPos,
+					BlockUtils.getDirection(blockPos)));
+
+			if (swing.get())
+				mc.player.swing(InteractionHand.MAIN_HAND);
+			else
+				mc.getConnection().send(new ServerboundSwingPacket(InteractionHand.MAIN_HAND));
+
+			mc.getConnection().send(new ServerboundPlayerActionPacket(
+					ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, blockPos,
+					BlockUtils.getDirection(blockPos)));
+		} else {
+			BlockUtils.breakBlock(blockPos, swing.get());
 		}
 	}
 
-	private boolean isBlockVisible(BlockPos pos) {
-		Vec3 eyePos = mc.player.getEyePosition();
-		Vec3 blockCenter = pos.getCenter();
-		return mc.level.clip(new net.minecraft.world.level.ClipContext(
-				eyePos, blockCenter,
-				net.minecraft.world.level.ClipContext.Block.COLLIDER,
-				net.minecraft.world.level.ClipContext.Fluid.NONE,
-				mc.player)).getBlockPos().equals(pos);
+	private boolean isOutOfRange(BlockPos blockPos) {
+		Vec3 pos = blockPos.getCenter();
+		ClipContext clipContext = new ClipContext(mc.player.getEyePosition(), pos, ClipContext.Block.COLLIDER,
+				ClipContext.Fluid.NONE, mc.player);
+		BlockHitResult result = mc.level.clip(clipContext);
+		if (result == null || !result.getBlockPos().equals(blockPos))
+			return !PlayerUtils.isWithin(pos, wallsRange.get());
+		return false;
+	}
+
+	private void addTargetedBlockToList() {
+		if (!selectBlockBind.get().isPressed() || mc.screen != null)
+			return;
+		HitResult hitResult = mc.hitResult;
+		if (hitResult == null || hitResult.getType() != HitResult.Type.BLOCK)
+			return;
+		BlockPos pos = ((BlockHitResult) hitResult).getBlockPos();
+		Block targetBlock = mc.level.getBlockState(pos).getBlock();
+		List<Block> list = filterBlocks.get();
+
+		if (list.contains(targetBlock)) {
+			list.remove(targetBlock);
+			info("Removed " + Names.get(targetBlock) + " from filter blocks");
+		} else {
+			list.add(targetBlock);
+			info("Added " + Names.get(targetBlock) + " to filter blocks");
+		}
 	}
 
 	private void equipSilkTool() {
