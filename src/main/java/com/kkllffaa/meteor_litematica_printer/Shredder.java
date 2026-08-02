@@ -69,8 +69,8 @@ public class Shredder extends Module {
 		TopDown
 	}
 
-	private final Setting<Integer> range = sgGeneral.add(new IntSetting.Builder()
-			.name("range").description("Nuke range.").defaultValue(5)
+	private final Setting<Double> range = sgGeneral.add(new DoubleSetting.Builder()
+			.name("range").description("Nuke range.").defaultValue(5.0)
 			.min(1).sliderMin(1).max(20).sliderMax(6).build());
 
 	private final Setting<Double> wallsRange = sgGeneral.add(new DoubleSetting.Builder()
@@ -202,7 +202,7 @@ public class Shredder extends Module {
 
 		blocks.clear();
 		Mode breakMode = mode.get();
-		int r = range.get();
+		int r = (int) Math.ceil(range.get());
 
 		BlockIterator.register(r + 1, r + 1, (blockPos, blockState) -> {
 			double distSq = Utils.squaredDistance(pX, pY, pZ, blockPos.getX() + 0.5, blockPos.getY() + 0.5,
