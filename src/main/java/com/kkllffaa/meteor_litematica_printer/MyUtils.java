@@ -35,7 +35,7 @@ public class MyUtils {
 
 	public static boolean place(BlockPos blockPos, Direction direction, SlabType slabType, Half blockHalf,
 			Direction blockHorizontalOrientation, Axis wantedAxies, boolean airPlace, boolean swingHand, boolean rotate,
-			boolean clientSide, int range, InteractionHand hand) {
+			boolean clientSide, double range, InteractionHand hand) {
 		if (mc.player == null)
 			return false;
 		if (!canPlace(blockPos))
@@ -293,7 +293,8 @@ public class MyUtils {
 	}
 
 	public static Direction getVisiblePlaceSide(BlockPos placeAt, BlockState placeAtState, SlabType slabType,
-			Half blockHalf, Direction blockHorizontalOrientation, Axis wantedAxies, int range, Direction requiredDir) {
+			Half blockHalf, Direction blockHorizontalOrientation, Axis wantedAxies, double range,
+			Direction requiredDir) {
 		if (mc.level == null)
 			return null;
 		for (Direction against : Direction.values()) {

@@ -16,6 +16,7 @@ import meteordevelopment.meteorclient.settings.BlockListSetting;
 import meteordevelopment.meteorclient.settings.BoolSetting;
 import meteordevelopment.meteorclient.settings.ColorSetting;
 import meteordevelopment.meteorclient.settings.EnumSetting;
+import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
@@ -51,12 +52,12 @@ public class Printer extends Module {
 	private final SettingGroup sgWorkMode = settings.createGroup("Work Mode");
 	private final SettingGroup sgRendering = settings.createGroup("Rendering");
 
-	private final Setting<Integer> printing_range = sgGeneral.add(new IntSetting.Builder()
+	private final Setting<Double> printing_range = sgGeneral.add(new DoubleSetting.Builder()
 			.name("printing-range")
 			.description("The block place range.")
-			.defaultValue(2)
-			.min(1).sliderMin(1)
-			.max(60).sliderMax(6)
+			.defaultValue(4.5)
+			.min(0.5).sliderMin(0.5)
+			.max(10).sliderMax(6)
 			.build());
 
 	private final Setting<Integer> printing_delay = sgGeneral.add(new IntSetting.Builder()
@@ -229,7 +230,8 @@ public class Printer extends Module {
 	public void onDeactivate() {
 		placed_fade.clear();
 		HideHelper.active = false;
-		needsReRender = true;
+		if (mc.levelRenderer != null)
+			mc.levelRenderer.allChanged();
 	}
 
 	@EventHandler
@@ -258,10 +260,11 @@ public class Printer extends Module {
 		toSort.clear();
 
 		if (timer >= printing_delay.get()) {
-			BlockIterator.register(printing_range.get() + 1, printing_range.get() + 1, (pos, blockState) -> {
+			int r = (int) Math.ceil(printing_range.get());
+			BlockIterator.register(r + 1, r + 1, (pos, blockState) -> {
 				BlockState required = worldSchematic.getBlockState(pos);
 
-				if (mc.player.blockPosition().closerThan(pos, printing_range.get())
+				if (mc.player.blockPosition().distSqr(pos) <= printing_range.get() * printing_range.get()
 						&& blockState.canBeReplaced()
 				// && !required.liquid()
 						&& required.getFluidState().isEmpty()
