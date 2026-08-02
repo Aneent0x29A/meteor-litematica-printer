@@ -49,13 +49,6 @@ public class Shredder extends Module {
 	private final SettingGroup sgWorkMode = settings.createGroup("Work Mode");
 	private final SettingGroup sgRender = settings.createGroup("Render");
 
-	public enum Mode {
-		ALL,
-		WRONG_BLOCK,
-		WRONG_STATE,
-		EXTRA
-	}
-
 	public enum FilterMode {
 		NONE,
 		WHITELIST,
@@ -85,8 +78,14 @@ public class Shredder extends Module {
 			.name("max-blocks-per-tick").description("Max blocks per tick.").defaultValue(100)
 			.min(1).sliderMin(1).max(100).build());
 
-	private final Setting<Mode> mode = sgGeneral.add(new EnumSetting.Builder<Mode>()
-			.name("mode").description("What to nuke.").defaultValue(Mode.ALL).build());
+	private final Setting<Boolean> breakWrongBlock = sgGeneral.add(new BoolSetting.Builder()
+			.name("wrong-block").description("Break blocks with wrong type.").defaultValue(true).build());
+
+	private final Setting<Boolean> breakWrongState = sgGeneral.add(new BoolSetting.Builder()
+			.name("wrong-state").description("Break blocks with wrong state/properties.").defaultValue(true).build());
+
+	private final Setting<Boolean> breakExtra = sgGeneral.add(new BoolSetting.Builder()
+			.name("extra").description("Break blocks not in schematic.").defaultValue(true).build());
 
 	private final Setting<SortMode> sortMode = sgGeneral.add(new EnumSetting.Builder<SortMode>()
 			.name("sort-mode").description("The blocks you want to mine first.")
@@ -201,7 +200,6 @@ public class Shredder extends Module {
 		equipSilkTool();
 
 		blocks.clear();
-		Mode breakMode = mode.get();
 		int r = (int) Math.ceil(range.get());
 
 		BlockIterator.register(r + 1, r + 1, (blockPos, blockState) -> {
@@ -219,7 +217,7 @@ public class Shredder extends Module {
 					return;
 			}
 
-			if (!shouldBreak(breakMode, schemState, blockState))
+			if (!shouldBreak(schemState, blockState))
 				return;
 
 			if (mc.player.getBoundingBox().intersects(Vec3.atLowerCornerOf(blockPos),
@@ -384,14 +382,14 @@ public class Shredder extends Module {
 		return false;
 	}
 
-	private boolean shouldBreak(Mode m, BlockState schem, BlockState world) {
+	private boolean shouldBreak(BlockState schem, BlockState world) {
 		if (schem.isAir())
-			return m == Mode.EXTRA || m == Mode.ALL;
+			return breakExtra.get();
 		if (world.isAir())
 			return false;
 		if (world.getBlock() != schem.getBlock())
-			return m == Mode.WRONG_BLOCK || m == Mode.ALL;
-		if (m == Mode.WRONG_STATE || m == Mode.ALL) {
+			return breakWrongBlock.get();
+		if (breakWrongState.get()) {
 			for (var prop : schem.getProperties()) {
 				if (!world.hasProperty(prop))
 					return true;
