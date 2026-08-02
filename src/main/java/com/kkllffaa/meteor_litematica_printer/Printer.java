@@ -150,6 +150,31 @@ public class Printer extends Module {
 			.visible(() -> listMode.get() != FilterMode.NONE)
 			.build());
 
+	private final Setting<Boolean> hidePlacedBlocks = sgRendering.add(new BoolSetting.Builder()
+			.name("hide-placed-blocks")
+			.description("Make correctly placed blocks translucent in Litematica area (like Xray).")
+			.defaultValue(false)
+			.onChanged(v -> {
+				HideHelper.active = v;
+				if (mc.levelRenderer != null)
+					mc.levelRenderer.allChanged();
+			})
+			.build());
+
+	private final Setting<Integer> hideOpacity = sgRendering.add(new IntSetting.Builder()
+			.name("hide-opacity")
+			.description("Opacity for hidden blocks (0 = invisible, 255 = fully opaque).")
+			.defaultValue(25)
+			.min(0).sliderMin(0).max(255).sliderMax(255)
+			.visible(hidePlacedBlocks::get)
+			.onChanged(v -> {
+				HideHelper.opacity = v;
+				needsReRender = true;
+				if (mc.levelRenderer != null)
+					mc.levelRenderer.allChanged();
+			})
+			.build());
+
 	private final Setting<Boolean> renderBlocks = sgRendering.add(new BoolSetting.Builder()
 			.name("render-placed-blocks")
 			.description("Renders block placements.")
@@ -180,6 +205,7 @@ public class Printer extends Module {
 
 	private int timer;
 	private int usedSlot = -1;
+	private boolean needsReRender;
 	private final List<BlockPos> toSort = new ArrayList<>();
 	private final List<Tuple<Integer, BlockPos>> placed_fade = new ArrayList<>();
 
@@ -194,15 +220,26 @@ public class Printer extends Module {
 	@Override
 	public void onActivate() {
 		onDeactivate();
+		HideHelper.active = hidePlacedBlocks.get();
+		HideHelper.opacity = hideOpacity.get();
+		needsReRender = true;
 	}
 
 	@Override
 	public void onDeactivate() {
 		placed_fade.clear();
+		HideHelper.active = false;
+		needsReRender = true;
 	}
 
 	@EventHandler
 	private void onTick(TickEvent.Post event) {
+		if (needsReRender) {
+			needsReRender = false;
+			if (mc.levelRenderer != null)
+				mc.levelRenderer.allChanged();
+		}
+
 		if (mc.player == null || mc.level == null) {
 			placed_fade.clear();
 			return;

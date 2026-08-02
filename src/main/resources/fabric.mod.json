@@ -13,6 +13,9 @@
   "entrypoints": {
     "meteor": ["com.kkllffaa.meteor_litematica_printer.Addon"]
   },
+  "mixins": [
+    "meteor-litematica-printer-sodium.mixins.json"
+  ],
   "depends": {
     "java": ">=25",
     "minecraft": ">=${mc_version}",

@@ -1,0 +1,8 @@
+{
+  "required": false,
+  "package": "com.kkllffaa.meteor_litematica_printer.mixin.sodium",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "SodiumBlockRendererMixin"
+  ]
+}
